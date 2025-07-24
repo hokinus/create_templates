@@ -10,7 +10,10 @@ Requirements:
 2. `PDB_RNA/` directory holding  
  - cif.gz or .cif files (get ID's from Advanced Search in PDB, searching for polymer entity RNA and then [batch download](https://www.rcsb.org/docs/programmatic-access/batch-downloads-with-shell-script)  
  - `pdb_release_dates_NA.csv` (get from Advanced Search in PDB), and  
- - `pdb_seqres_NA.fasta` (available at [link](https://files.rcsb.org/pub/pdb/derived_data/pdb_seqres.txt.gz))
+ - `pdb_seqres_NA.fasta` (available at [link](https://files.rcsb.org/pub/pdb/derived_data/pdb_seqres.txt.gz)).  
+ 
+ 
+ Note that a minimal `PDB_RNA` folder that works for the example is provided here. A version used for the Kaggle RNA folding competition in May 2025 is available [here](https://www.kaggle.com/competitions/stanford-rna-3d-folding/data). If that is not accessible, check out this [clone](https://www.kaggle.com/datasets/rhijudas/clone-of-stanford-rna-3d-modeling-competition-data).
 
 
 ## Example command line

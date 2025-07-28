@@ -24,17 +24,17 @@ python3 ../create_templates_csv.py \
 	 -s validation_sequences.csv \
 	--mmseqs_results_file validation_Result.txt \
 	--skip_temporal_cutoff \
-	-o validation_templates.csv 
+	--outfile validation_templates.csv 
 ```
 
-Output should match what is in `example/output/validation_templates.csv`
+Output should match what is in `example/example_output/validation_templates.csv`
 
 ## All options
 
 ```
 % python3 create_templates_csv.py -h
 
-usage: create_templates_csv.py [-h] [-s SEQUENCES_FILE] [--mmseqs_results_file MMSEQS_RESULTS_FILE] [-o OUTFILE] [--max_templates MAX_TEMPLATES] [--cif_dir CIF_DIR]
+usage: create_templates_csv.py [-h] [-s SEQUENCES_FILE] [--mmseqs_results_file MMSEQS_RESULTS_FILE] [--outfile OUTFILE] [--dataset_name DATASET_NAME] [-o OUTDIR] [--max_templates MAX_TEMPLATES] [--cif_dir CIF_DIR]
                                [--skip_temporal_cutoff] [--start_idx START_IDX] [--end_idx END_IDX] [--id_map ID_MAP]
 
 Prepare templates.csv file similar to labels.csv but with MMseqs2-identified templates
@@ -45,8 +45,10 @@ options:
                         CSV file with columns including "target_id" and "sequence". Default is `test_sequences.csv`.
   --mmseqs_results_file MMSEQS_RESULTS_FILE
                         MMseqs output with query,target,evalue,qstart,qend,tstart,tend,qaln,taln.
-  -o, --outfile OUTFILE
-                        Name of the output CSV file. Default is `templates.csv`.
+  --outfile OUTFILE     Name of the output CSV file. Default is `templates.csv`.
+  --dataset_name, --name DATASET_NAME
+                        full dataset_name, tag for csvs
+  -o, --outdir OUTDIR   Where to save output CSVs (Default ./)
   --max_templates MAX_TEMPLATES
                         Maximum number of templates for target. Default is 5. Use 40 to prepare solution
   --cif_dir CIF_DIR     Directory holding cif.gz files, pdb_release_dates_NA.csv, and pdb_seqres_NA.fasta

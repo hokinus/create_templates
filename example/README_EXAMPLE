@@ -1,0 +1,6 @@
+python3 ../create_templates_csv.py \
+	 -s validation_sequences.csv \
+	--mmseqs_results_file validation_Result.txt \
+	--skip_temporal_cutoff \
+	--outfile validation_templates.csv
+	

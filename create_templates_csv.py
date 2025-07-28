@@ -11,6 +11,7 @@ import sys
 import csv
 import warnings
 import argparse
+from copy import deepcopy
 from datetime import datetime
 
 # Suppress warnings
@@ -23,9 +24,15 @@ parser.add_argument('-s', '--sequences_file',
 parser.add_argument('--mmseqs_results_file',
                     default= '',
                     help='MMseqs output with query,target,evalue,qstart,qend,tstart,tend,qaln,taln.')
-parser.add_argument('-o', '--outfile',
-                    default='templates.csv',
+parser.add_argument('--outfile',
+                    default='',
                     help='Name of the output CSV file. Default is `templates.csv`.')
+parser.add_argument('--dataset_name','--name',
+                    default='',
+                    help='full dataset_name, tag for csvs')
+parser.add_argument('-o','--outdir',
+                    default='./',
+                    help='Where to save output CSVs (Default ./)' )
 parser.add_argument('--max_templates',
                     default=40, type=int,
                     help='Maximum number of templates for target. Default is 5. Use 40 to prepare solution')
@@ -49,11 +56,14 @@ args = parser.parse_args()
 sequences_file = args.sequences_file
 mmseqs_results_file = args.mmseqs_results_file
 outfile = args.outfile
+dataset_name = args.dataset_name
 MAX_TEMPLATES = args.max_templates
 cif_dir = args.cif_dir
 id_map_file = args.id_map
 start_idx = args.start_idx
 end_idx = args.end_idx
+
+assert( not( len(outfile)>0 and len(dataset_name)>0 ) )
 
 if len(cif_dir) == 0:
     dir_name = os.path.dirname( os.path.abspath( sys.argv[0] ) )
@@ -64,6 +74,10 @@ def clean_res_name( res_name ):
         return res_name
     else: # can be modified residue with 3-letter name.
         return 'X'
+
+#all atoms
+ALL_ATOMS=["P","OP1","OP2","O5'","O3'","C1'","C2'","C3'","C4'","O4'","C5'","N1","C2","O2","N3","C4","N4","C5","C6","O4","N9","N7","C8","N6","N2","O6"]
+C1PRIME_KEY="C1\'"
 
 def extract_title_release_date( cif_path ):
 
@@ -121,48 +135,50 @@ def extract_rna_sequence(cif_path,chain_id):
     mon_id     = mmcif_dict.get('_pdbx_poly_seq_scheme.mon_id',[])
     pdb_mon_id = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_mon_id',[])
     pdb_seq_num = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_seq_num',[])
+    auth_seq_num = mmcif_dict.get('_pdbx_poly_seq_scheme.auth_seq_num',[])
+    pdb_ins_code = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_ins_code',[])
     chain_ids = list(set(strand_id))
     seq_chains = []
 
     full_sequence = ''
+    full_sequence = ''
     pdb_chain_sequence = ''
     pdb_chain_seq_nums = []
-    for (strand,mon,pdb_mon,pdb_num) in zip(strand_id,mon_id,pdb_mon_id,pdb_seq_num):
+    pdb_chain_ins_codes = []
+
+    for (strand,mon,pdb_mon,pdb_num,auth_num,ins_code) in zip(strand_id,mon_id,pdb_mon_id,pdb_seq_num,auth_seq_num,pdb_ins_code):
         if strand==chain_id:
             full_sequence += clean_res_name( mon )
             pdb_chain_sequence += clean_res_name( pdb_mon )
-            pdb_chain_seq_nums.append( pdb_num)
+            # note use of auth_seq_num instead of pdb_seq_num since that is what Biopython uses for Residue.id
+            pdb_chain_seq_nums.append( auth_num )
+            pdb_chain_ins_codes.append( ins_code )
 
-    #print(full_sequence)
-    #print(pdb_chain_sequence)
-    #print(pdb_chain_seq_nums)
+    return full_sequence,pdb_chain_sequence,pdb_chain_seq_nums,pdb_chain_ins_codes
 
-    return full_sequence,pdb_chain_sequence,pdb_chain_seq_nums
-
-def get_c1prime_labels(cif_path, chain_id, alignment, chain_seq_nums):
+def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes):
     """
-    Extract C1' coordinates for an RNA chain based on a reference sequence alignment.
+    Extract coordinates for an RNA chain based on a reference sequence alignment.
 
     This function uses Biopython to parse a CIF file, finds the specified chain,
-    and extracts C1' coordinates for RNA residues. It aligns these coordinates
-    with a reference sequence, handling gaps and missing residues.
+    and extracts coordinates for RNA residues if there is indeed a C1' (nan's otherwise).
 
     Parameters:
     cif_path (str): Path to the CIF file.
     chain_id (str): Chain identifier in the CIF file.
-    alignment (list): A list containing two elements:
-                      alignment[0]: List of residues for the reference sequence (A,C,G,U,-)
-                      alignment[1]: List of residues for the chain sequence (A,C,G,U,X,-)
-    chain_seq_nums (list): numbers of residues in PDB
+    chain_sequence (str): sequence of target derived from polyx_ fields, used for output and as sanity check.
+    chain_seq_nums  (list of strings): numbers of residues in PDB (auth_seq_num)
+    chain_ins_codes (list of strings): ins_codes in PDB (needed to ensure unique lookup!)
 
     Returns:
-    list of tuples: Each tuple contains (resname, resid, x, y, z), where:
+    list of tuples: Each tuple contains (resname, resid, xyz, pdb_seq_num), where:
                     resname: Residue name (A, C, G, or U) from the reference sequence
                     resid: Residue ID (1, 2, 3, ...) based on position in reference sequence
-                    x, y, z: C1' coordinates (nan for missing residues/atoms)
+                    xyz: dictionary of xyz coords for all 26 (heavy) atom names,
+                        P,OP1,OP2,O5',O3',C1',C2',C3',C4',O4',C5',N1,C2,O2,N3,C4,N4,C5,C6,O4,N9,N7,C8,N6,N2,O6
+                    pdb_info: (author seq num, ins code, resname)
 
-    The length of the returned list is equal to the number of non-gap residues
-    in the reference sequence.
+    The length of the returned list is equal to the length of input chain_sequence.
     """
     # Parse the CIF file
     parser = MMCIFParser()
@@ -177,43 +193,61 @@ def get_c1prime_labels(cif_path, chain_id, alignment, chain_seq_nums):
 
     # getting residues out of chain is complex -- easier to get a list ahead of time.
     residues = {}
-    for residue in chain: residues[ residue.id[1] ] = residue
-
-    chain_seq = ''.join( [clean_res_name(residue.get_resname()) for residue in chain ] )
-    #print(chain_seq)
+    for residue in chain:
+        residues[ (residue.id[1],residue.id[2]) ] = residue
 
     # Initialize the result list
     result = []
 
-    # Counter for residue ID in reference sequence
-    ref_resid = 0
-    chain_idx = 0
-    for ref_res, chain_res in zip(alignment[0], alignment[1]):
-        if chain_res != '-': chain_idx += 1
-        if ref_res != '-':
-            ref_resid += 1
-            if chain_res == '-': # or chain_res == 'X':
-                # Missing residue in chain or unknown residue
-                result.append((ref_res, ref_resid, np.nan, np.nan, np.nan, -1e18))
-            else:
-                # Find the corresponding residue in the chain
-                try:
-                    #chain_seq_num = int(chain_seq_nums[ref_resid-1])
-                    chain_seq_num = int(chain_seq_nums[chain_idx-1])
-                    residue = residues[chain_seq_num]
-                    c1_prime = residue['C1\'']
-                    coords = c1_prime.coord
-                    if residue.get_resname() != chain_res:
-                        print( 'WARNING!',ref_resid,chain_idx,chain_seq_num,residue.get_resname(),chain_res)
-                    result.append((ref_res, ref_resid, coords[0], coords[1], coords[2], residue.id[1]))
-                except KeyError:
-                    # C1' atom not found
-                    result.append((ref_res, ref_resid, np.nan, np.nan, np.nan, -1e18))
-                except Exception as e:
-                    # Any other error (e.g., residue not found)
-                    result.append((ref_res, ref_resid, np.nan, np.nan, np.nan, -1e18))
+    assert( len( chain_sequence) == len( chain_seq_nums ) )
+    for i, chain_res in enumerate(chain_sequence):
+        chain_resid = i+1
+        chain_seq_num  = int(chain_seq_nums[i]) if (chain_seq_nums[i].isdigit() and i < len(chain_seq_nums)) else 0
+        chain_ins_code = chain_ins_codes[i].replace('.',' ')
+        res_id = (chain_seq_num,chain_ins_code)
 
+        xyz = { atom:(np.nan,np.nan,np.nan) for atom in ALL_ATOMS}
+        res_info = (chain_res, chain_resid, xyz, (-1e18,' ','') ) # blank
+        if res_id in residues:
+            residue = residues[ res_id ]
+            if 'C1\'' in residue:
+                resname = residue.get_resname()
+                if chain_res != clean_res_name( resname ):
+                    print( f'Warning! mismatch residue at {chain_resid}: target {chain_res} pdb {residue.get_resname()} chain_seq_num {chain_seq_num} residue.id {residue.id[1]}' )
+
+                for atom in ALL_ATOMS:
+                    if atom in residue:
+                        xyz[atom] = residue[atom].coord
+
+                res_info = (chain_res, chain_resid, xyz, (res_id[0], res_id[1], resname) )
+        result.append(res_info)
     return result
+
+def get_target_coord_data( chain_coord_data, alignment ):
+    '''
+    Inputs
+      chain_coord_data = coordinates and other info, read out from PDB file for the chain
+      alignment = two strings that map chain to target with gaps as '-'
+
+    Output
+      target_coord_data = coordinates for target sequence, with gaps filled with nan.
+    '''
+    target_coord_data = []
+    chain_pos = -1
+    target_pos = -1
+    xyz_blank = { atom:(np.nan,np.nan,np.nan) for atom in ALL_ATOMS}
+    for (chain_res,target_res) in zip(alignment[0],alignment[1]):
+        if chain_res  != '-':
+            chain_pos += 1
+        if target_res != '-':
+            target_pos += 1
+            if chain_res != '-':
+                coord_data=chain_coord_data[ chain_pos ]
+                target_coord_data.append( (target_res, target_pos+1,coord_data[2],coord_data[3]) )
+            else:
+                target_coord_data.append( (target_res, target_pos+1,xyz_blank,(-1e18,' ','') ) )
+
+    return target_coord_data
 
 def is_before_or_on(d1, d2):
     date1 = pd.to_datetime(d1)
@@ -250,6 +284,7 @@ def read_release_dates( release_data_file ):
 
 # Prepare to collect output data
 output_labels = []
+output_allatom_labels = []
 
 # Read the FASTA file
 df = pd.read_csv( sequences_file )
@@ -279,6 +314,7 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
 
     # look for alignments and fill out C1' templates
     templates = []
+    template_coord_data = []
     for aln_line in aln_lines:
         if len(aln_line)!=9: continue # some kind of overflow in some alignments?
 
@@ -300,7 +336,6 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
             cif_path = os.path.join(cif_dir, f'{pdb_id.lower()}.cif') # kaggle style
             if not os.path.isfile( cif_path ): continue # occasional alignment to DNA, ignore!
 
-
         # these release dates in the CIF files can be buggy!
         title,release_date_unreliable = extract_title_release_date( cif_path )
 
@@ -310,7 +345,7 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
 
         # sometimes there is a mismatch between PDB's fasta files and what's actually stored in coordinates,
         # so best to get the actual residue numbers for the chain
-        chain_full_sequence,chain_sequence,chain_seq_nums = extract_rna_sequence(cif_path,chain_id)
+        chain_full_sequence,chain_sequence,chain_seq_nums,chain_ins_codes = extract_rna_sequence(cif_path,chain_id)
 
         # get 3d data
         alignment = []
@@ -320,16 +355,19 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
         tend=int(tend)
         alignment.append( sequence[:(qstart-1)] + '-'*(tstart-1) + qaln + sequence[qend:]  )
         alignment.append( '-'*(qstart-1)        + 'X'*(tstart-1) + taln + '-'*(len(sequence)-qend) )
-        print( alignment[0] )
-        print( alignment[1] )
-        c1prime_data = get_c1prime_labels( cif_path, chain_id, alignment, chain_seq_nums )
+        print( alignment[0],'query' )
+        print( alignment[1],'template' )
+        chain_coord_data = get_coord_labels( cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes )
+
+        coord_data = get_target_coord_data( chain_coord_data, (alignment[1],alignment[0]) )
 
         # mismatch in FASTA sequence and the polyx info in the CIF file
-        if len(c1prime_data) != len(sequence):
-            print( 'WARNING! len(c1prime_data) != len(sequence)', 'len c1prime_data', len(c1prime_data), 'len sequence', len(sequence), 'qstart',qstart,'len qaln',len(qaln),'qend',qend)
+        if len(coord_data) != len(sequence):
+            print( 'WARNING! len(coord_data) != len(sequence)', 'len coord_data', len(coord_data), 'len sequence', len(sequence), 'qstart',qstart,'len qaln',len(qaln),'qend',qend)
             continue
 
-        templates.append( c1prime_data )
+        templates.append( template )
+        template_coord_data.append( coord_data )
 
         if len(templates) >= MAX_TEMPLATES: break
 
@@ -344,21 +382,42 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
             "resname": sequence[i],
             "resid": i+1,
         }
+        output_allatom_label = deepcopy(output_label)
 
-        # output templates
+        # output templates, C1'
         for n in range(len(templates)):
-            res,resid,x,y,z,pdb_seqnum = templates[n][i]
+            template = templates[n]
+            res,resid,xyz,pdb_info = template_coord_data[n][i]
             assert( resid == i+1 )
-            output_label[ f"x_{n+1}" ] = x
-            output_label[ f"y_{n+1}" ] = y
-            output_label[ f"z_{n+1}" ] = z
+            output_label[ f"x_{n+1}" ] = xyz[C1PRIME_KEY][0]
+            output_label[ f"y_{n+1}" ] = xyz[C1PRIME_KEY][1]
+            output_label[ f"z_{n+1}" ] = xyz[C1PRIME_KEY][2]
+
+            for atom in ALL_ATOMS:
+                output_allatom_label.update( {
+                    f"{atom}_x_{n+1}": xyz[atom][0],
+                    f"{atom}_y_{n+1}": xyz[atom][1],
+                    f"{atom}_z_{n+1}": xyz[atom][2]
+                })
+            output_allatom_label.update( {f"pdb_id_{n+1}": template,f"pdb_seq_num_{n+1}": int(pdb_info[0]), f"pdb_ins_code_{n+1}": pdb_info[1], f"pdb_resname_{n+1}": pdb_info[2]} )
 
         # pad with blank models
         for n in range(len(templates),MAX_TEMPLATES):
             output_label[ f"x_{n+1}" ] = np.nan
             output_label[ f"y_{n+1}" ] = np.nan
             output_label[ f"z_{n+1}" ] = np.nan
+
+            for atom in ALL_ATOMS:
+                output_allatom_label.update( {
+                    f"{atom}_x_{n+1}": np.nan,
+                    f"{atom}_y_{n+1}": np.nan,
+                    f"{atom}_z_{n+1}": np.nan
+                })
+            output_allatom_label.update( {f"pdb_id_{n+1}": "",f"pdb_seq_num_{n+1}": np.nan, f"pdb_ins_code_{n+1}": '', f"pdb_resname_{n+1}": ''} )
+
+
         output_labels.append( output_label )
+        output_allatom_labels.append( output_allatom_label)
 
     num_targets += 1
     # if num_targets > 1: break # for debug!
@@ -372,4 +431,22 @@ def output_csv( output_data, outfile ):
     df.to_csv(outfile, index=False)
     print(f"Output written to {outfile}")
 
+outdir = args.outdir
+os.makedirs(outdir, exist_ok=True)
+if outdir[-1] != '/': outdir += '/'
+split_tag = ''
+if args.start_idx > 0:
+    num_digits = len(str(len(targets)))
+    split_tag = f'.{start_idx:0{num_digits}d}_{end_idx:0{num_digits}d}'
+
+if len( args.outfile ) == 0:
+    if len( dataset_name) == 0: dataset_name = 'test'
+    outfile = f"{outdir}{dataset_name}.templates{split_tag}.csv"
+    outfile_allatom = f"{outdir}{dataset_name}.allatom_templates{split_tag}.csv"
+else:
+    outfile = f"{args.outdir}/{args.outfile}"
+    if outfile.count('labels.csv')>1: outfile_allatom = outfile.replace('labels.csv','allatom.csv')
+    else: outfile_allatom = outfile + '.allatom.csv'
+
 output_csv( output_labels, outfile )
+output_csv( output_allatom_labels, outfile_allatom )

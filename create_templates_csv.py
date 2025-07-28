@@ -216,8 +216,8 @@ def get_c1prime_labels(cif_path, chain_id, alignment, chain_seq_nums):
     return result
 
 def is_before_or_on(d1, d2):
-    date1 = datetime.strptime(d1, "%Y-%m-%d")
-    date2 = datetime.strptime(d2, "%Y-%m-%d")
+    date1 = pd.to_datetime(d1)
+    date2 = pd.to_datetime(d2)
     return date1 <= date2
 
 def read_id_map(id_map_file):

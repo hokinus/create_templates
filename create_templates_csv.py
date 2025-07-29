@@ -326,15 +326,15 @@ for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
 
         pdb_id,chain_id = template.split('_')
 
-        release_date = release_dates[pdb_id.upper()] # pulled from PDB server
-
-        if not args.skip_temporal_cutoff and is_before_or_on(temporal_cutoff,release_date): continue
-
         # need to do alignment
         cif_path = os.path.join(cif_dir, f'{pdb_id.upper()}.cif.gz')
         if not os.path.isfile( cif_path ):
             cif_path = os.path.join(cif_dir, f'{pdb_id.lower()}.cif') # kaggle style
             if not os.path.isfile( cif_path ): continue # occasional alignment to DNA, ignore!
+
+        release_date = release_dates[pdb_id.upper()] # pulled from PDB server
+
+        if not args.skip_temporal_cutoff and is_before_or_on(temporal_cutoff,release_date): continue
 
         # these release dates in the CIF files can be buggy!
         title,release_date_unreliable = extract_title_release_date( cif_path )

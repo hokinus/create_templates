@@ -51,23 +51,7 @@ parser.add_argument('--end_idx',
 parser.add_argument('--id_map',
                     default='',
                     help='CSV file with fields `orig` and `new` for mapping original target IDs to new target IDs. Default is `` (no mapping).')
-args = parser.parse_args()
 
-sequences_file = args.sequences_file
-mmseqs_results_file = args.mmseqs_results_file
-outfile = args.outfile
-dataset_name = args.dataset_name
-MAX_TEMPLATES = args.max_templates
-cif_dir = args.cif_dir
-id_map_file = args.id_map
-start_idx = args.start_idx
-end_idx = args.end_idx
-
-assert( not( len(outfile)>0 and len(dataset_name)>0 ) )
-
-if len(cif_dir) == 0:
-    dir_name = os.path.dirname( os.path.abspath( sys.argv[0] ) )
-    cif_dir = dir_name+'/PDB_RNA'
 
 def clean_res_name( res_name ):
     if res_name in ['A', 'C', 'G', 'U']:
@@ -282,148 +266,156 @@ def read_release_dates( release_data_file ):
     return release_dates
 
 
-# Prepare to collect output data
-output_labels = []
-output_allatom_labels = []
+def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cutoff,
+                         MAX_TEMPLATES, cif_dir, id_map_file='', start_idx=0, end_idx=0 ):
 
-# Read the FASTA file
-df = pd.read_csv( sequences_file )
-targets = df['target_id'].to_list()
-sequences = df['sequence'].to_list()
-temporal_cutoffs = df['temporal_cutoff'].to_list()
+    # Prepare to collect output data
+    output_labels = []
+    output_allatom_labels = []
 
-aln_lines = []
-for line in open( mmseqs_results_file ).readlines():
-    # query,template,eval,qstart,qend,tstart,tend,qaln,taln
-    aln_lines.append( line.strip().split() )
+    if len(cif_dir) == 0:
+        dir_name = os.path.dirname( os.path.abspath( sys.argv[0] ) )
+        cif_dir = dir_name+'/PDB_RNA'
 
-id_map = read_id_map( id_map_file )
+    # Read the FASTA file
+    df = pd.read_csv( sequences_file )
+    targets = df['target_id'].to_list()
+    sequences = df['sequence'].to_list()
+    temporal_cutoffs = df['temporal_cutoff'].to_list()
 
-release_dates = read_release_dates( cif_dir + '/pdb_release_dates_NA.csv' )
+    aln_lines = []
+    for line in open( mmseqs_results_file ).readlines():
+        # query,template,eval,qstart,qend,tstart,tend,qaln,taln
+        aln_lines.append( line.strip().split() )
 
-if start_idx == 0 and end_idx == 0: # do all targets by default
-    start_idx = 1
-    end_idx = len(targets)
+    id_map = read_id_map( id_map_file )
 
-num_targets = 0
-count = 0
-for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
-    count += 1
-    if (count < start_idx) or (count > end_idx): continue
+    release_dates = read_release_dates( cif_dir + '/pdb_release_dates_NA.csv' )
 
+    if start_idx == 0 and end_idx == 0: # do all targets by default
+        start_idx = 1
+        end_idx = len(targets)
 
-    # look for alignments and fill out C1' templates
-    templates = []
-    template_coord_data = []
-    for aln_line in aln_lines:
-        if len(aln_line)!=9: continue # some kind of overflow in some alignments?
-
-        query,template,eval,qstart,qend,tstart,tend,qaln,taln = aln_line
-
-        if query != target: continue
-
-        if int(qend)<int(qstart): continue # aligned to reverse complement!
-
-        pdb_id,chain_id = template.split('_')
-
-        # need to do alignment
-        cif_path = os.path.join(cif_dir, f'{pdb_id.upper()}.cif.gz')
-        if not os.path.isfile( cif_path ):
-            cif_path = os.path.join(cif_dir, f'{pdb_id.lower()}.cif') # kaggle style
-            if not os.path.isfile( cif_path ): continue # occasional alignment to DNA, ignore!
-
-        release_date = release_dates[pdb_id.upper()] # pulled from PDB server
-
-        if not args.skip_temporal_cutoff and is_before_or_on(temporal_cutoff,release_date): continue
-
-        # these release dates in the CIF files can be buggy!
-        title,release_date_unreliable = extract_title_release_date( cif_path )
-
-        print('\n',target,temporal_cutoff,"   ",template)
-        if title: print(f"PDB Title: {title}")
-        if release_date: print(f"PDB Release Date: {release_date}")
-
-        # sometimes there is a mismatch between PDB's fasta files and what's actually stored in coordinates,
-        # so best to get the actual residue numbers for the chain
-        chain_full_sequence,chain_sequence,chain_seq_nums,chain_ins_codes = extract_rna_sequence(cif_path,chain_id)
-
-        # get 3d data
-        alignment = []
-        qstart=int(qstart)
-        qend=int(qend)
-        tstart=int(tstart)
-        tend=int(tend)
-        alignment.append( sequence[:(qstart-1)] + '-'*(tstart-1) + qaln + sequence[qend:]  )
-        alignment.append( '-'*(qstart-1)        + 'X'*(tstart-1) + taln + '-'*(len(sequence)-qend) )
-        print( alignment[0],'query' )
-        print( alignment[1],'template' )
-        chain_coord_data = get_coord_labels( cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes )
-
-        coord_data = get_target_coord_data( chain_coord_data, (alignment[1],alignment[0]) )
-
-        # mismatch in FASTA sequence and the polyx info in the CIF file
-        if len(coord_data) != len(sequence):
-            print( 'WARNING! len(coord_data) != len(sequence)', 'len coord_data', len(coord_data), 'len sequence', len(sequence), 'qstart',qstart,'len qaln',len(qaln),'qend',qend)
-            continue
-
-        templates.append( template )
-        template_coord_data.append( coord_data )
-
-        if len(templates) >= MAX_TEMPLATES: break
-
-    print( "Found", len(templates), "templates for", target,'\n' )
-
-    mapped_target = target
-    if not id_map is None: mapped_target = id_map[target]
-
-    for i in range(len(sequence)):
-        output_label = {
-            "ID": f'{mapped_target}_{i+1}',
-            "resname": sequence[i],
-            "resid": i+1,
-        }
-        output_allatom_label = deepcopy(output_label)
-
-        # output templates, C1'
-        for n in range(len(templates)):
-            template = templates[n]
-            res,resid,xyz,pdb_info = template_coord_data[n][i]
-            assert( resid == i+1 )
-            output_label[ f"x_{n+1}" ] = xyz[C1PRIME_KEY][0]
-            output_label[ f"y_{n+1}" ] = xyz[C1PRIME_KEY][1]
-            output_label[ f"z_{n+1}" ] = xyz[C1PRIME_KEY][2]
-
-            for atom in ALL_ATOMS:
-                output_allatom_label.update( {
-                    f"{atom}_x_{n+1}": xyz[atom][0],
-                    f"{atom}_y_{n+1}": xyz[atom][1],
-                    f"{atom}_z_{n+1}": xyz[atom][2]
-                })
-            output_allatom_label.update( {f"pdb_id_{n+1}": template,f"pdb_seq_num_{n+1}": int(pdb_info[0]), f"pdb_ins_code_{n+1}": pdb_info[1], f"pdb_resname_{n+1}": pdb_info[2]} )
-
-        # pad with blank models
-        for n in range(len(templates),MAX_TEMPLATES):
-            output_label[ f"x_{n+1}" ] = np.nan
-            output_label[ f"y_{n+1}" ] = np.nan
-            output_label[ f"z_{n+1}" ] = np.nan
-
-            for atom in ALL_ATOMS:
-                output_allatom_label.update( {
-                    f"{atom}_x_{n+1}": np.nan,
-                    f"{atom}_y_{n+1}": np.nan,
-                    f"{atom}_z_{n+1}": np.nan
-                })
-            output_allatom_label.update( {f"pdb_id_{n+1}": "",f"pdb_seq_num_{n+1}": np.nan, f"pdb_ins_code_{n+1}": '', f"pdb_resname_{n+1}": ''} )
+    num_targets = 0
+    count = 0
+    for target,sequence,temporal_cutoff in zip(targets,sequences,temporal_cutoffs):
+        count += 1
+        if (count < start_idx) or (count > end_idx): continue
 
 
-        output_labels.append( output_label )
-        output_allatom_labels.append( output_allatom_label)
+        # look for alignments and fill out C1' templates
+        templates = []
+        template_coord_data = []
+        for aln_line in aln_lines:
+            if len(aln_line)!=9: continue # some kind of overflow in some alignments?
 
-    num_targets += 1
-    # if num_targets > 1: break # for debug!
+            query,template,eval,qstart,qend,tstart,tend,qaln,taln = aln_line
+
+            if query != target: continue
+
+            if int(qend)<int(qstart): continue # aligned to reverse complement!
+
+            pdb_id,chain_id = template.split('_')
+
+            # need to do alignment
+            cif_path = os.path.join(cif_dir, f'{pdb_id.upper()}.cif.gz')
+            if not os.path.isfile( cif_path ):
+                cif_path = os.path.join(cif_dir, f'{pdb_id.lower()}.cif') # kaggle style
+                if not os.path.isfile( cif_path ): continue # occasional alignment to DNA, ignore!
+
+            release_date = release_dates[pdb_id.upper()] # pulled from PDB server
+
+            if not skip_temporal_cutoff and is_before_or_on(temporal_cutoff,release_date): continue
+
+            # these release dates in the CIF files can be buggy!
+            title,release_date_unreliable = extract_title_release_date( cif_path )
+
+            print('\n',target,temporal_cutoff,"   ",template)
+            if title: print(f"PDB Title: {title}")
+            if release_date: print(f"PDB Release Date: {release_date}")
+
+            # sometimes there is a mismatch between PDB's fasta files and what's actually stored in coordinates,
+            # so best to get the actual residue numbers for the chain
+            chain_full_sequence,chain_sequence,chain_seq_nums,chain_ins_codes = extract_rna_sequence(cif_path,chain_id)
+
+            # get 3d data
+            alignment = []
+            qstart=int(qstart)
+            qend=int(qend)
+            tstart=int(tstart)
+            tend=int(tend)
+            alignment.append( sequence[:(qstart-1)] + '-'*(tstart-1) + qaln + sequence[qend:]  )
+            alignment.append( '-'*(qstart-1)        + 'X'*(tstart-1) + taln + '-'*(len(sequence)-qend) )
+            print( alignment[0],'query' )
+            print( alignment[1],'template' )
+            chain_coord_data = get_coord_labels( cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes )
+
+            coord_data = get_target_coord_data( chain_coord_data, (alignment[1],alignment[0]) )
+
+            # mismatch in FASTA sequence and the polyx info in the CIF file
+            if len(coord_data) != len(sequence):
+                print( 'WARNING! len(coord_data) != len(sequence)', 'len coord_data', len(coord_data), 'len sequence', len(sequence), 'qstart',qstart,'len qaln',len(qaln),'qend',qend)
+                continue
+
+            templates.append( template )
+            template_coord_data.append( coord_data )
+
+            if len(templates) >= MAX_TEMPLATES: break
+
+        print( "Found", len(templates), "templates for", target,'\n' )
+
+        mapped_target = target
+        if not id_map is None: mapped_target = id_map[target]
+
+        for i in range(len(sequence)):
+            output_label = {
+                "ID": f'{mapped_target}_{i+1}',
+                "resname": sequence[i],
+                "resid": i+1,
+            }
+            output_allatom_label = deepcopy(output_label)
+
+            # output templates, C1'
+            for n in range(len(templates)):
+                template = templates[n]
+                res,resid,xyz,pdb_info = template_coord_data[n][i]
+                assert( resid == i+1 )
+                output_label[ f"x_{n+1}" ] = xyz[C1PRIME_KEY][0]
+                output_label[ f"y_{n+1}" ] = xyz[C1PRIME_KEY][1]
+                output_label[ f"z_{n+1}" ] = xyz[C1PRIME_KEY][2]
+
+                for atom in ALL_ATOMS:
+                    output_allatom_label.update( {
+                        f"{atom}_x_{n+1}": xyz[atom][0],
+                        f"{atom}_y_{n+1}": xyz[atom][1],
+                        f"{atom}_z_{n+1}": xyz[atom][2]
+                    })
+                output_allatom_label.update( {f"pdb_id_{n+1}": template,f"pdb_seq_num_{n+1}": int(pdb_info[0]), f"pdb_ins_code_{n+1}": pdb_info[1], f"pdb_resname_{n+1}": pdb_info[2]} )
+
+            # pad with blank models
+            for n in range(len(templates),MAX_TEMPLATES):
+                output_label[ f"x_{n+1}" ] = np.nan
+                output_label[ f"y_{n+1}" ] = np.nan
+                output_label[ f"z_{n+1}" ] = np.nan
+
+                for atom in ALL_ATOMS:
+                    output_allatom_label.update( {
+                        f"{atom}_x_{n+1}": np.nan,
+                        f"{atom}_y_{n+1}": np.nan,
+                        f"{atom}_z_{n+1}": np.nan
+                    })
+                output_allatom_label.update( {f"pdb_id_{n+1}": "",f"pdb_seq_num_{n+1}": np.nan, f"pdb_ins_code_{n+1}": '', f"pdb_resname_{n+1}": ''} )
 
 
-print(f'Completed {num_targets} targets\n')
+            output_labels.append( output_label )
+            output_allatom_labels.append( output_allatom_label)
+
+        num_targets += 1
+        # if num_targets > 1: break # for debug!
+
+    print(f'Completed {num_targets} targets\n')
+
+    return output_labels, output_allatom_labels, targets
 
 # Create a DataFrame and write to CSV
 def output_csv( output_data, outfile ):
@@ -431,22 +423,50 @@ def output_csv( output_data, outfile ):
     df.to_csv(outfile, index=False)
     print(f"Output written to {outfile}")
 
-outdir = args.outdir
-os.makedirs(outdir, exist_ok=True)
-if outdir[-1] != '/': outdir += '/'
-split_tag = ''
-if args.start_idx > 0:
-    num_digits = len(str(len(targets)))
-    split_tag = f'.{start_idx:0{num_digits}d}_{end_idx:0{num_digits}d}'
 
-if len( args.outfile ) == 0:
-    if len( dataset_name) == 0: dataset_name = 'test'
-    outfile = f"{outdir}{dataset_name}.templates{split_tag}.csv"
-    outfile_allatom = f"{outdir}{dataset_name}.allatom_templates{split_tag}.csv"
-else:
-    outfile = f"{args.outdir}/{args.outfile}"
-    if outfile.count('labels.csv')>1: outfile_allatom = outfile.replace('labels.csv','allatom.csv')
-    else: outfile_allatom = outfile + '.allatom.csv'
+def output_template_labels_to_csv( output_labels, output_allatom_labels, targets, outdir='', outfile='', dataset_name='', start_idx=0, end_idx=0 ):
+    assert( not( len(outfile)>0 and len(dataset_name)>0 ) )
 
-output_csv( output_labels, outfile )
-output_csv( output_allatom_labels, outfile_allatom )
+    os.makedirs(outdir, exist_ok=True)
+    if outdir[-1] != '/': outdir += '/'
+    split_tag = ''
+    if start_idx > 0:
+        num_digits = len(str(len(targets)))
+        split_tag = f'.{start_idx:0{num_digits}d}_{end_idx:0{num_digits}d}'
+
+    if len( outfile ) == 0:
+        if len( dataset_name) == 0: dataset_name = 'test'
+        outfile = f"{outdir}{dataset_name}.templates{split_tag}.csv"
+        outfile_allatom = f"{outdir}{dataset_name}.allatom_templates{split_tag}.csv"
+    else:
+        outfile = f"{outdir}/{outfile}"
+        if outfile.count('labels.csv')>1: outfile_allatom = outfile.replace('labels.csv','allatom.csv')
+        else: outfile_allatom = outfile + '.allatom.csv'
+
+    output_csv( output_labels, outfile )
+    output_csv( output_allatom_labels, outfile_allatom )
+
+
+if __name__ == "__main__":
+    args = parser.parse_args()
+
+    sequences_file = args.sequences_file
+    mmseqs_results_file = args.mmseqs_results_file
+    MAX_TEMPLATES = args.max_templates
+    cif_dir = args.cif_dir
+    id_map_file = args.id_map
+    start_idx = args.start_idx
+    end_idx = args.end_idx
+    skip_temporal_cutoff = args.skip_temporal_cutoff
+
+    output_labels,output_allatom_labels,targets = get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cutoff,
+                                                       MAX_TEMPLATES, cif_dir, id_map_file, start_idx, end_idx )
+
+
+    outdir = args.outdir
+    outfile = args.outfile
+    dataset_name = args.dataset_name
+    output_template_labels_to_csv( output_labels, output_allatom_labels, targets, outdir, outfile, dataset_name, start_idx, end_idx )
+
+
+

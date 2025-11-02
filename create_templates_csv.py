@@ -60,7 +60,7 @@ def clean_res_name( res_name ):
         return 'X'
 
 #all atoms
-ALL_ATOMS=["P","OP1","OP2","O5'","O3'","C1'","C2'","C3'","C4'","O4'","C5'","N1","C2","O2","N3","C4","N4","C5","C6","O4","N9","N7","C8","N6","N2","O6"]
+ALL_ATOMS=["P","OP1","OP2","O5'","O3'","C1'","C2'","O2'","C3'","C4'","O4'","C5'","N1","C2","O2","N3","C4","N4","C5","C6","O4","N9","N7","C8","N6","N2","O6"]
 C1PRIME_KEY="C1\'"
 
 def extract_title_release_date( cif_path ):
@@ -441,6 +441,7 @@ def output_template_labels_to_csv( output_labels, output_allatom_labels, targets
     else:
         outfile = f"{outdir}/{outfile}"
         if outfile.count('labels.csv')>1: outfile_allatom = outfile.replace('labels.csv','allatom.csv')
+        elif outfile.endswith('.csv'):    outfile_allatom = outfile.replace('.csv','.allatom.csv')
         else: outfile_allatom = outfile + '.allatom.csv'
 
     output_csv( output_labels, outfile )

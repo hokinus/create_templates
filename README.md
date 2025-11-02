@@ -27,7 +27,9 @@ python3 ../create_templates_csv.py \
 	--outfile validation_templates.csv 
 ```
 
-Output should match what is in `example/example_output/validation_templates.csv`
+Output should match what is in `example/example_output/validation_templates.csv`.
+
+Another output, which is much longer and includes all heavy atom xyz should match what is in `example/example_output/validation_templates.allatom.csv`. 
 
 ## All options
 

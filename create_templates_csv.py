@@ -222,7 +222,7 @@ def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_i
                     if atom in residue_atoms:
                         xyz[atom] = tuple(residue_atoms[atom]['coord'])
 
-                res_info = (chain_res, chain_resid, xyz, (res_key[0], res_key[1], resname) )
+                res_info = (chain_res, chain_resid, xyz, (res_key[0], res_key[1] if res_key[1] else ' ', resname) )
         result.append(res_info)
     return result
 

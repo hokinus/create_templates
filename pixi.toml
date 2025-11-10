@@ -10,3 +10,10 @@ version = "0.1.0"
 biopython = ">=1.86,<2"
 pandas = ">=2.3.3,<3"
 biotite = ">=1.4.0,<2"
+
+[feature.dev.dependencies]
+pytest = ">=7.0,<9"
+
+[environments]
+default = {features = []}
+dev = {features = ["dev"]}

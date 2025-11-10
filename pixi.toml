@@ -12,8 +12,8 @@ pandas = ">=2.3.3,<3"
 biotite = ">=1.4.0,<2"
 
 [feature.dev.dependencies]
-pytest = ">=7.0,<9"
-pytest-benchmark = ">=4.0,<5"
+pytest = ">=8.0,<9"
+pytest-benchmark = ">=5.0,<9"
 
 [environments]
 default = {features = []}

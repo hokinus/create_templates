@@ -59,14 +59,7 @@ def clean_res_name( res_name ):
 ALL_ATOMS=["P","OP1","OP2","O5'","O3'","C1'","C2'","O2'","C3'","C4'","O4'","C5'","N1","C2","O2","N3","C4","N4","C5","C6","O4","N9","N7","C8","N6","N2","O6"]
 C1PRIME_KEY="C1\'"
 
-def extract_title_release_date( cif_path ):
-    
-    if cif_path.endswith('.gz'):
-        with gzip.open(cif_path, 'rt') as cif_file:
-            pdbx_file = pdbx.CIFFile.read(cif_file)
-    else:
-        pdbx_file = pdbx.CIFFile.read(cif_path)
-
+def extract_title_release_date(pdbx_file):
     block = pdbx_file.block
     
     possible_title_fields = [
@@ -107,14 +100,7 @@ def extract_title_release_date( cif_path ):
     return pdb_title, release_date
 
 
-def extract_rna_sequence(cif_path, chain_id):
-    
-    if cif_path.endswith('.gz'):
-        with gzip.open(cif_path, 'rt') as cif_file:
-            pdbx_file = pdbx.CIFFile.read(cif_file)
-    else:
-        pdbx_file = pdbx.CIFFile.read(cif_path)
-
+def extract_rna_sequence(pdbx_file, chain_id):
     block = pdbx_file.block
     
     pdb_sequence = None
@@ -150,7 +136,9 @@ def extract_rna_sequence(cif_path, chain_id):
 
     return full_sequence,pdb_chain_sequence,pdb_chain_seq_nums,pdb_chain_ins_codes
 
-def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes):
+def get_coord_labels(
+    pdbx_file, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes
+):
     """
     Extract coordinates for an RNA chain based on a reference sequence alignment.
 
@@ -174,12 +162,6 @@ def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_i
 
     The length of the returned list is equal to the length of input chain_sequence.
     """
-    # Parse the CIF file
-    if cif_path.endswith('.gz'):
-        with gzip.open(cif_path, 'rt') as cif_file:
-            pdbx_file = pdbx.CIFFile.read(cif_file)
-    else:
-        pdbx_file = pdbx.CIFFile.read(cif_path)
     
     # Get structure using biotite
     structure = pdbx.get_structure(pdbx_file, model=1)
@@ -284,6 +266,13 @@ def read_release_dates( release_data_file ):
 
     return release_dates
 
+def read_cif_file(cif_path):
+    if cif_path.endswith(".gz"):
+        with gzip.open(cif_path, "rt") as cif_file:
+            pdbx_file = pdbx.CIFFile.read(cif_file)
+    else:
+        pdbx_file = pdbx.CIFFile.read(cif_path)
+    return pdbx_file
 
 def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cutoff,
                          MAX_TEMPLATES, cif_dir, id_map_file='', start_idx=0, end_idx=0 ):
@@ -346,8 +335,9 @@ def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cuto
 
             if not skip_temporal_cutoff and is_before_or_on(temporal_cutoff,release_date): continue
 
+            cif_file = read_cif_file(cif_path)
             # these release dates in the CIF files can be buggy!
-            title,release_date_unreliable = extract_title_release_date( cif_path )
+            title, release_date_unreliable = extract_title_release_date(cif_file)
 
             print('\n',target,temporal_cutoff,"   ",template)
             if title: print(f"PDB Title: {title}")
@@ -355,7 +345,9 @@ def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cuto
 
             # sometimes there is a mismatch between PDB's fasta files and what's actually stored in coordinates,
             # so best to get the actual residue numbers for the chain
-            chain_full_sequence,chain_sequence,chain_seq_nums,chain_ins_codes = extract_rna_sequence(cif_path,chain_id)
+            chain_full_sequence, chain_sequence, chain_seq_nums, chain_ins_codes = (
+                extract_rna_sequence(cif_file, chain_id)
+            )
 
             # get 3d data
             alignment = []
@@ -367,7 +359,9 @@ def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cuto
             alignment.append( '-'*(qstart-1)        + 'X'*(tstart-1) + taln + '-'*(len(sequence)-qend) )
             print( alignment[0],'query' )
             print( alignment[1],'template' )
-            chain_coord_data = get_coord_labels( cif_path, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes )
+            chain_coord_data = get_coord_labels(
+                cif_file, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes
+            )
 
             coord_data = get_target_coord_data( chain_coord_data, (alignment[1],alignment[0]) )
 

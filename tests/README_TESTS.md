@@ -121,6 +121,28 @@ pixi install
 pixi run -e dev python -m pytest tests/test_templates.py
 ```
 
+## Running Benchmarks
+
+To benchmark the `get_template_labels` function performance:
+
+```bash
+pixi run -e dev pytest tests/benchmark_templates.py --benchmark-only
+```
+
+For more detailed output with statistics:
+
+```bash
+pixi run -e dev pytest tests/benchmark_templates.py --benchmark-only --benchmark-verbose
+```
+
+To save benchmark results automatically:
+
+```bash
+pixi run -e dev pytest tests/benchmark_templates.py --benchmark-only --benchmark-autosave
+```
+
+The benchmark suite automatically discovers test cases from `results/` and runs the template label generation on each case, measuring execution time and providing detailed performance statistics. Benchmarks can be compared across runs by using the `--benchmark-autosave` option.
+
 ## Adding New Tests
 
 To add a new test case:

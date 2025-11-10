@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-from Bio import SeqIO,PDB,BiopythonWarning
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict
-from Bio.Seq import Seq
-from Bio.PDB import MMCIFParser
+import biotite.structure as struc
+import biotite.structure.io.pdbx as pdbx
+import biotite.sequence as seq
 import numpy as np
 import pandas as pd
 import os
@@ -13,9 +12,6 @@ import warnings
 import argparse
 from copy import deepcopy
 from datetime import datetime
-
-# Suppress warnings
-warnings.simplefilter('ignore', BiopythonWarning)
 
 parser = argparse.ArgumentParser(description="Prepare templates.csv file similar to labels.csv but with MMseqs2-identified templates")
 parser.add_argument('-s', '--sequences_file',
@@ -64,79 +60,93 @@ ALL_ATOMS=["P","OP1","OP2","O5'","O3'","C1'","C2'","O2'","C3'","C4'","O4'","C5'"
 C1PRIME_KEY="C1\'"
 
 def extract_title_release_date( cif_path ):
-
+    
     if cif_path.endswith('.gz'):
         with gzip.open(cif_path, 'rt') as cif_file:
-            mmcif_dict = MMCIF2Dict(cif_file)
+            pdbx_file = pdbx.CIFFile.read(cif_file)
     else:
-        mmcif_dict = MMCIF2Dict(cif_path)
+        pdbx_file = pdbx.CIFFile.read(cif_path)
 
+    block = pdbx_file.block
+    
     possible_title_fields = [
-        '_struct.title',
-        '_entry.title',
-        '_struct_keywords.pdbx_keywords'
+        'struct',
+        'entry',
+        'struct_keywords'
     ]
 
     pdb_title = None
     for field in possible_title_fields:
-        if field in mmcif_dict:
-            pdb_title = mmcif_dict[field]
-            if isinstance(pdb_title, list):
-                pdb_title = ' '.join(pdb_title)
-            break
+        if field in block:
+            if field == 'struct' and 'title' in block[field]:
+                pdb_title = block[field]['title'].as_item()
+                break
+            elif field == 'entry' and 'title' in block[field]:
+                pdb_title = block[field]['title'].as_item()
+                break
+            elif field == 'struct_keywords' and 'pdbx_keywords' in block[field]:
+                pdb_title = block[field]['pdbx_keywords'].as_item()
+                break
 
     possible_date_fields = [
-        '_pdbx_database_status.initial_release_date',
-        '_pdbx_database_status.recvd_initial_deposition_date',
-        '_database_PDB_rev.date'
+        ('pdbx_database_status', 'initial_release_date'),
+        ('pdbx_database_status', 'recvd_initial_deposition_date'),
+        ('database_PDB_rev', 'date')
     ]
 
     release_date = None
-    for field in possible_date_fields:
-        if field in mmcif_dict:
-            release_date = mmcif_dict[field]
-            if isinstance(release_date, list):
-                release_date = release_date[0]  # Take the first date if it's a list
+    for category, field in possible_date_fields:
+        if category in block and field in block[category]:
+            date_data = block[category][field]
+            if hasattr(date_data, 'as_array'):
+                release_date = date_data.as_array()[0]  # Take the first date if it's an array
+            else:
+                release_date = date_data.as_item()
             break
 
     return pdb_title, release_date
 
 
-def extract_rna_sequence(cif_path,chain_id):
-
+def extract_rna_sequence(cif_path, chain_id):
+    
     if cif_path.endswith('.gz'):
         with gzip.open(cif_path, 'rt') as cif_file:
-            mmcif_dict = MMCIF2Dict(cif_file)
+            pdbx_file = pdbx.CIFFile.read(cif_file)
     else:
-        mmcif_dict = MMCIF2Dict(cif_path)
+        pdbx_file = pdbx.CIFFile.read(cif_path)
 
+    block = pdbx_file.block
+    
     pdb_sequence = None
     pdb_chain_id = None
     chain_seq_nums = None
 
     # Extract _pdbx_poly_seq_scheme information
-    strand_id  = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_strand_id',[])
-    mon_id     = mmcif_dict.get('_pdbx_poly_seq_scheme.mon_id',[])
-    pdb_mon_id = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_mon_id',[])
-    pdb_seq_num = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_seq_num',[])
-    auth_seq_num = mmcif_dict.get('_pdbx_poly_seq_scheme.auth_seq_num',[])
-    pdb_ins_code = mmcif_dict.get('_pdbx_poly_seq_scheme.pdb_ins_code',[])
-    chain_ids = list(set(strand_id))
-    seq_chains = []
+    if 'pdbx_poly_seq_scheme' in block:
+        scheme = block['pdbx_poly_seq_scheme']
+        
+        strand_id = scheme['pdb_strand_id'].as_array() if 'pdb_strand_id' in scheme else []
+        mon_id = scheme['mon_id'].as_array() if 'mon_id' in scheme else []
+        pdb_mon_id = scheme['pdb_mon_id'].as_array() if 'pdb_mon_id' in scheme else []
+        pdb_seq_num = scheme['pdb_seq_num'].as_array() if 'pdb_seq_num' in scheme else []
+        auth_seq_num = scheme['auth_seq_num'].as_array() if 'auth_seq_num' in scheme else []
+        pdb_ins_code = scheme['pdb_ins_code'].as_array() if 'pdb_ins_code' in scheme else []
+        
+        chain_ids = list(set(strand_id))
+        seq_chains = []
 
-    full_sequence = ''
-    full_sequence = ''
-    pdb_chain_sequence = ''
-    pdb_chain_seq_nums = []
-    pdb_chain_ins_codes = []
+        full_sequence = ''
+        pdb_chain_sequence = ''
+        pdb_chain_seq_nums = []
+        pdb_chain_ins_codes = []
 
-    for (strand,mon,pdb_mon,pdb_num,auth_num,ins_code) in zip(strand_id,mon_id,pdb_mon_id,pdb_seq_num,auth_seq_num,pdb_ins_code):
-        if strand==chain_id:
-            full_sequence += clean_res_name( mon )
-            pdb_chain_sequence += clean_res_name( pdb_mon )
-            # note use of auth_seq_num instead of pdb_seq_num since that is what Biopython uses for Residue.id
-            pdb_chain_seq_nums.append( auth_num )
-            pdb_chain_ins_codes.append( ins_code )
+        for (strand,mon,pdb_mon,pdb_num,auth_num,ins_code) in zip(strand_id,mon_id,pdb_mon_id,pdb_seq_num,auth_seq_num,pdb_ins_code):
+            if strand==chain_id:
+                full_sequence += clean_res_name( mon )
+                pdb_chain_sequence += clean_res_name( pdb_mon )
+                # note use of auth_seq_num instead of pdb_seq_num since that is what Biotite uses for res_id
+                pdb_chain_seq_nums.append( auth_num )
+                pdb_chain_ins_codes.append( ins_code )
 
     return full_sequence,pdb_chain_sequence,pdb_chain_seq_nums,pdb_chain_ins_codes
 
@@ -144,7 +154,7 @@ def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_i
     """
     Extract coordinates for an RNA chain based on a reference sequence alignment.
 
-    This function uses Biopython to parse a CIF file, finds the specified chain,
+    This function uses Biotite to parse a CIF file, finds the specified chain,
     and extracts coordinates for RNA residues if there is indeed a C1' (nan's otherwise).
 
     Parameters:
@@ -165,20 +175,29 @@ def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_i
     The length of the returned list is equal to the length of input chain_sequence.
     """
     # Parse the CIF file
-    parser = MMCIFParser()
     if cif_path.endswith('.gz'):
-        with gzip.open(cif_path, 'rt') as gz_file:
-            structure = parser.get_structure('RNA', gz_file )
+        with gzip.open(cif_path, 'rt') as cif_file:
+            pdbx_file = pdbx.CIFFile.read(cif_file)
     else:
-        structure = parser.get_structure('RNA', cif_path)
-
-    # Get the specified chain
-    chain = structure[0][chain_id]
-
-    # getting residues out of chain is complex -- easier to get a list ahead of time.
-    residues = {}
-    for residue in chain:
-        residues[ (residue.id[1],residue.id[2]) ] = residue
+        pdbx_file = pdbx.CIFFile.read(cif_path)
+    
+    # Get structure using biotite
+    structure = pdbx.get_structure(pdbx_file, model=1)
+    
+    # Filter for the specified chain
+    chain_filter = structure.chain_id == chain_id
+    chain_atoms = structure[chain_filter]
+    
+    # Group atoms by residue
+    residue_dict = {}
+    for i, atom in enumerate(chain_atoms):
+        res_key = (int(chain_atoms.res_id[i]), str(chain_atoms.ins_code[i]))
+        if res_key not in residue_dict:
+            residue_dict[res_key] = {}
+        residue_dict[res_key][str(chain_atoms.atom_name[i])] = {
+            'coord': chain_atoms.coord[i],
+            'res_name': chain_atoms.res_name[i]
+        }
 
     # Initialize the result list
     result = []
@@ -187,23 +206,23 @@ def get_coord_labels(cif_path, chain_id, chain_sequence, chain_seq_nums, chain_i
     for i, chain_res in enumerate(chain_sequence):
         chain_resid = i+1
         chain_seq_num  = int(chain_seq_nums[i]) if (chain_seq_nums[i].isdigit() and i < len(chain_seq_nums)) else 0
-        chain_ins_code = chain_ins_codes[i].replace('.',' ')
-        res_id = (chain_seq_num,chain_ins_code)
+        chain_ins_code = chain_ins_codes[i].replace('.','')
+        res_key = (chain_seq_num, chain_ins_code)
 
         xyz = { atom:(np.nan,np.nan,np.nan) for atom in ALL_ATOMS}
         res_info = (chain_res, chain_resid, xyz, (-1e18,' ','') ) # blank
-        if res_id in residues:
-            residue = residues[ res_id ]
-            if 'C1\'' in residue:
-                resname = residue.get_resname()
+        if res_key in residue_dict:
+            residue_atoms = residue_dict[res_key]
+            if "C1'" in residue_atoms:
+                resname = residue_atoms["C1'"]['res_name']
                 if chain_res != clean_res_name( resname ):
-                    print( f'Warning! mismatch residue at {chain_resid}: target {chain_res} pdb {residue.get_resname()} chain_seq_num {chain_seq_num} residue.id {residue.id[1]}' )
+                    print( f'Warning! mismatch residue at {chain_resid}: target {chain_res} pdb {resname} chain_seq_num {chain_seq_num}' )
 
                 for atom in ALL_ATOMS:
-                    if atom in residue:
-                        xyz[atom] = residue[atom].coord
+                    if atom in residue_atoms:
+                        xyz[atom] = tuple(residue_atoms[atom]['coord'])
 
-                res_info = (chain_res, chain_resid, xyz, (res_id[0], res_id[1], resname) )
+                res_info = (chain_res, chain_resid, xyz, (res_key[0], res_key[1], resname) )
         result.append(res_info)
     return result
 
@@ -468,6 +487,3 @@ if __name__ == "__main__":
     outfile = args.outfile
     dataset_name = args.dataset_name
     output_template_labels_to_csv( output_labels, output_allatom_labels, targets, outdir, outfile, dataset_name, start_idx, end_idx )
-
-
-

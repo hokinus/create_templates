@@ -1,0 +1,12 @@
+[workspace]
+channels = ["conda-forge"]
+name = "create_templates"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+biopython = ">=1.86,<2"
+pandas = ">=2.3.3,<3"
+biotite = ">=1.4.0,<2"

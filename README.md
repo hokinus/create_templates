@@ -6,7 +6,7 @@ Currently based on MMseqs to carry out search and alignment.
 See also [MMseqs2 3D RNA Template notebook](https://www.kaggle.com/code/rhijudas/mmseqs2-3d-rna-template-identification) on Kaggle, which has the full workflow! 
 
 Requirements:   
-1. `biopython`  
+1. `biotite`  
 2. `PDB_RNA/` directory holding  
  - cif.gz or .cif files (get ID's from Advanced Search in PDB, searching for polymer entity RNA and then [batch download](https://www.rcsb.org/docs/programmatic-access/batch-downloads-with-shell-script)  
  - `pdb_release_dates_NA.csv` (get from Advanced Search in PDB), and  

@@ -10,6 +10,7 @@ version = "0.1.0"
 biopython = ">=1.86,<2"
 pandas = ">=2.3.3,<3"
 biotite = ">=1.4.0,<2"
+tqdm = ">=4.0,<5"
 
 [feature.dev.dependencies]
 pytest = ">=8.0,<9"

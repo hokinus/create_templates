@@ -83,12 +83,12 @@ def test_get_template_labels(test_case):
 
     # Convert to CSV for roundtrip comparison (deals with some weird '', ' ' string serializations and reading as NaN)
     tmp_io = StringIO()
-    generated_labels.to_csv(tmp_io, index=False)
+    generated_labels.to_csv(tmp_io, index=False, float_format="%.3f")
     tmp_io.seek(0)
 
     generated_labels = pd.read_csv(tmp_io)
     tmp_io = StringIO()
-    generated_allatom.to_csv(tmp_io, index=False)
+    generated_allatom.to_csv(tmp_io, index=False, float_format="%.3f")
     tmp_io.seek(0)
     generated_allatom = pd.read_csv(tmp_io)
 

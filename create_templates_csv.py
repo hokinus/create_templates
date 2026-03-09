@@ -102,39 +102,45 @@ def extract_title_release_date(pdbx_file):
 
 def extract_rna_sequence(pdbx_file, chain_id):
     block = pdbx_file.block
-    
-    pdb_sequence = None
-    pdb_chain_id = None
-    chain_seq_nums = None
 
     # Extract _pdbx_poly_seq_scheme information
-    if 'pdbx_poly_seq_scheme' in block:
-        scheme = block['pdbx_poly_seq_scheme']
-        
-        strand_id = scheme['pdb_strand_id'].as_array() if 'pdb_strand_id' in scheme else []
-        mon_id = scheme['mon_id'].as_array() if 'mon_id' in scheme else []
-        pdb_mon_id = scheme['pdb_mon_id'].as_array() if 'pdb_mon_id' in scheme else []
-        pdb_seq_num = scheme['pdb_seq_num'].as_array() if 'pdb_seq_num' in scheme else []
-        auth_seq_num = scheme['auth_seq_num'].as_array() if 'auth_seq_num' in scheme else []
-        pdb_ins_code = scheme['pdb_ins_code'].as_array() if 'pdb_ins_code' in scheme else []
-        
-        chain_ids = list(set(strand_id))
-        seq_chains = []
+    if "pdbx_poly_seq_scheme" in block:
+        scheme = block["pdbx_poly_seq_scheme"]
 
-        full_sequence = ''
-        pdb_chain_sequence = ''
-        pdb_chain_seq_nums = []
-        pdb_chain_ins_codes = []
+        strand_id = (
+            scheme["pdb_strand_id"].as_array() if "pdb_strand_id" in scheme else []
+        )
 
-        for (strand,mon,pdb_mon,pdb_num,auth_num,ins_code) in zip(strand_id,mon_id,pdb_mon_id,pdb_seq_num,auth_seq_num,pdb_ins_code):
-            if strand==chain_id:
-                full_sequence += clean_res_name( mon )
-                pdb_chain_sequence += clean_res_name( pdb_mon )
-                # note use of auth_seq_num instead of pdb_seq_num since that is what Biotite uses for res_id
-                pdb_chain_seq_nums.append( auth_num )
-                pdb_chain_ins_codes.append( ins_code )
+        mask = strand_id == chain_id
 
-    return full_sequence,pdb_chain_sequence,pdb_chain_seq_nums,pdb_chain_ins_codes
+        # note use of auth_seq_num instead of pdb_seq_num since that is what Biotite uses for res_id
+        pdb_mon_id = scheme["pdb_mon_id"].as_array()[mask]
+
+        pdb_chain_seq_nums = scheme["seq_id"].as_array()[mask]
+        pdb_chain_ins_codes = scheme["pdb_ins_code"].as_array()[mask]
+        print(pdb_chain_seq_nums.dtype)
+        if not np.issubdtype(pdb_chain_seq_nums.dtype, np.number):
+            try:
+                num_mask = np.strings.isnumeric(pdb_chain_seq_nums)
+                pdb_chain_seq_nums[~num_mask] = 0
+                pdb_chain_seq_nums = pdb_chain_seq_nums.astype(int)
+            except AttributeError as e:
+                raise RuntimeError(
+                    f"Error processing sequence numbers for chain {chain_id}: {e}"
+                )
+        # Sanitize residue numbers
+        pdb_chain_seq_nums[len(pdb_mon_id) :] = 0
+
+        # Sanitize insertion codes
+        pdb_chain_ins_codes = np.strings.replace(pdb_chain_ins_codes, ".", "")
+        pdb_chain_ins_codes[len(pdb_mon_id) :] = ""
+
+        pdb_chain_sequence = np.vectorize(clean_res_name)(pdb_mon_id)
+
+        return pdb_chain_sequence, pdb_chain_seq_nums, pdb_chain_ins_codes
+    else:
+        return "", [], []
+
 
 def get_coord_labels(
     pdbx_file, chain_id, chain_sequence, chain_seq_nums, chain_ins_codes
@@ -162,50 +168,68 @@ def get_coord_labels(
 
     The length of the returned list is equal to the length of input chain_sequence.
     """
-    
-    # Get structure using biotite
-    structure = pdbx.get_structure(pdbx_file, model=1)
-    
+
+    # Get structure using biotite, use label_ ids
+    structure = pdbx.get_structure(pdbx_file, use_author_fields=False, model=1)
+
     # Filter for the specified chain
-    chain_filter = structure.chain_id == chain_id
+    chain_filter = (
+        structure.chain_id == chain_id
+    )  # TODO: make sure chain ids match label_asym_id
     chain_atoms = structure[chain_filter]
-    
-    # Group atoms by residue
-    residue_dict = {}
-    for i, atom in enumerate(chain_atoms):
-        res_key = (int(chain_atoms.res_id[i]), str(chain_atoms.ins_code[i]))
-        if res_key not in residue_dict:
-            residue_dict[res_key] = {}
-        residue_dict[res_key][str(chain_atoms.atom_name[i])] = {
-            'coord': chain_atoms.coord[i],
-            'res_name': chain_atoms.res_name[i]
+
+    # We need to match observed residues to requested sequence
+    # We can match residues directly based on ids, both use label_ ids
+    full_sequence = pd.DataFrame(
+        {
+            "resnum": chain_seq_nums,
+            "ins_code": chain_ins_codes,
+            "resname": chain_sequence,
         }
+    )
+    # Expand full sequence to include all_atoms, use long form (each atom is a row)
+    all_atoms_df = pd.DataFrame({"atom_name": ALL_ATOMS, "temp_key": 1})
+    full_sequence["temp_key"] = 1
 
-    # Initialize the result list
+    full_sequence_all_atom = full_sequence.merge(
+        all_atoms_df, on="temp_key", how="outer"
+    )
+
+    # Create a DataFrame from chain_atoms to merge with
+    chain_atoms_df = pd.DataFrame(
+        {
+            "resname": chain_atoms.res_name,
+            "resnum": chain_atoms.res_id,
+            "ins_code": chain_atoms.ins_code,
+            "atom_name": chain_atoms.atom_name,
+            "x": chain_atoms.coord[:, 0],
+            "y": chain_atoms.coord[:, 1],
+            "z": chain_atoms.coord[:, 2],
+        }
+    )
+
+    # Deduplicate to handle alternate conformations (keep first occurrence per resnum+atom_name)
+    chain_atoms_df = chain_atoms_df.drop_duplicates(subset=["resnum", "atom_name"], keep="first")
+
+    full_sequence_all_atom = full_sequence_all_atom.merge(
+        chain_atoms_df, on=["resnum", "atom_name"], how="left", suffixes=("", "_obs")
+    )
+
+    # Build result: list of (resname, resid, xyz, pdb_info) tuples — one per residue
     result = []
+    n_atoms = len(ALL_ATOMS)
+    for i in range(len(chain_sequence)):
+        chunk = full_sequence_all_atom.iloc[i * n_atoms : (i + 1) * n_atoms]
+        xyz = {atom: (np.nan, np.nan, np.nan) for atom in ALL_ATOMS}
+        obs_resname = ""
+        for _, row in chunk.iterrows():
+            if not pd.isna(row["x"]):
+                xyz[row["atom_name"]] = (float(row["x"]), float(row["y"]), float(row["z"]))
+                if not obs_resname and "resname_obs" in chunk.columns and not pd.isna(row["resname_obs"]):
+                    obs_resname = str(row["resname_obs"])
+        ins_c = chain_ins_codes[i] if chain_ins_codes[i] else " "
+        result.append((chain_sequence[i], i + 1, xyz, (chain_seq_nums[i], ins_c, obs_resname)))
 
-    assert( len( chain_sequence) == len( chain_seq_nums ) )
-    for i, chain_res in enumerate(chain_sequence):
-        chain_resid = i+1
-        chain_seq_num  = int(chain_seq_nums[i]) if (chain_seq_nums[i].isdigit() and i < len(chain_seq_nums)) else 0
-        chain_ins_code = chain_ins_codes[i].replace('.','')
-        res_key = (chain_seq_num, chain_ins_code)
-
-        xyz = { atom:(np.nan,np.nan,np.nan) for atom in ALL_ATOMS}
-        res_info = (chain_res, chain_resid, xyz, (-1e18,' ','') ) # blank
-        if res_key in residue_dict:
-            residue_atoms = residue_dict[res_key]
-            if "C1'" in residue_atoms:
-                resname = residue_atoms["C1'"]['res_name']
-                if chain_res != clean_res_name( resname ):
-                    print( f'Warning! mismatch residue at {chain_resid}: target {chain_res} pdb {resname} chain_seq_num {chain_seq_num}' )
-
-                for atom in ALL_ATOMS:
-                    if atom in residue_atoms:
-                        xyz[atom] = tuple(residue_atoms[atom]['coord'])
-
-                res_info = (chain_res, chain_resid, xyz, (res_key[0], res_key[1] if res_key[1] else ' ', resname) )
-        result.append(res_info)
     return result
 
 def get_target_coord_data( chain_coord_data, alignment ):
@@ -345,8 +369,8 @@ def get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cuto
 
             # sometimes there is a mismatch between PDB's fasta files and what's actually stored in coordinates,
             # so best to get the actual residue numbers for the chain
-            chain_full_sequence, chain_sequence, chain_seq_nums, chain_ins_codes = (
-                extract_rna_sequence(cif_file, chain_id)
+            chain_sequence, chain_seq_nums, chain_ins_codes = extract_rna_sequence(
+                cif_file, chain_id
             )
 
             # get 3d data

@@ -25,7 +25,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from create_templates_csv import get_template_labels
+from create_templates_csv import get_template_labels_serial
 
 # Import shared test utilities and discovery functions
 from conftest import discover_test_cases, TemplateTestCase
@@ -45,10 +45,10 @@ def test_discovery(test_cases):
 )
 def test_get_template_labels(test_case):
     """
-    Test get_template_labels against expected output.
+    Test get_template_labels_serial against expected output.
 
     For each discovered test case, this test:
-    1. Runs get_template_labels with the input files
+    1. Runs get_template_labels_serial with the input files
     2. Compares the generated output with expected output
     3. Validates both C1' coordinates and all-atom coordinates
     """
@@ -64,15 +64,17 @@ def test_get_template_labels(test_case):
 
     # Run the function
     try:
-        output_labels, output_allatom_labels, targets = get_template_labels(
-            sequences_file=test_case.sequences_file,
-            mmseqs_results_file=test_case.mmseqs_file,
-            skip_temporal_cutoff=True,
-            MAX_TEMPLATES=40,
-            cif_dir=cif_dir,
-            id_map_file="",
-            start_idx=0,
-            end_idx=0,
+        output_labels, output_allatom_labels, targets, start_idx, end_idx = (
+            get_template_labels_serial(
+                sequences_file=test_case.sequences_file,
+                mmseqs_results_file=test_case.mmseqs_file,
+                skip_temporal_cutoff=True,
+                MAX_TEMPLATES=40,
+                cif_dir=cif_dir,
+                id_map_file="",
+                start_idx=0,
+                end_idx=0,
+            )
         )
     except Exception as e:
         pytest.fail(f"get_template_labels raised exception: {str(e)}")

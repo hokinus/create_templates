@@ -31,9 +31,9 @@ parser.add_argument('--outfile',
 parser.add_argument('--dataset_name','--name',
                     default='',
                     help='full dataset_name, tag for csvs')
-parser.add_argument('-o','--outdir',
-                    default='./',
-                    help='Where to save output CSVs (Default ./)' )
+parser.add_argument(
+    "-o", "--outdir", default=None, help="Where to save output CSVs (Default ./)"
+)
 parser.add_argument('--max_templates',
                     default=40, type=int,
                     help='Maximum number of templates for target. Default is 5. Use 40 to prepare solution')
@@ -52,12 +52,12 @@ parser.add_argument('--end_idx',
 parser.add_argument('--id_map',
                     default='',
                     help='CSV file with fields `orig` and `new` for mapping original target IDs to new target IDs. Default is `` (no mapping).')
-parser.add_argument('--num_workers',
-                    default=4, type=int,
-                    help='Number of parallel worker processes for processing targets. Default is 4.')
-parser.add_argument('--no_parallel',
-                    action='store_true',
-                    help='Disable parallel processing and run sequentially.')
+parser.add_argument(
+    "--num_workers",
+    default=1,
+    type=int,
+    help="Number of parallel worker processes for processing targets. Default is 1,sequential run.",
+)
 
 
 def clean_res_name( res_name ):
@@ -464,20 +464,57 @@ def process_target(target, sequence, temporal_cutoff, aln_lines, skip_temporal_c
 
     return output_labels, output_allatom_labels
 
-
-def get_template_labels(
-    sequences_file,
-    mmseqs_results_file,
+def process_and_save_target(
+    target,
+    sequence,
+    temporal_cutoff,
+    aln_lines,
     skip_temporal_cutoff,
     MAX_TEMPLATES,
+    cif_dir,
+    release_dates,
+    id_map,
+    outdir,
+):
+    output_labels, output_allatom_labels = process_target(
+        target,
+        sequence,
+        temporal_cutoff,
+        aln_lines,
+        skip_temporal_cutoff,
+        MAX_TEMPLATES,
+        cif_dir,
+        release_dates,
+        id_map,
+    )
+    output_template_labels_to_csv(
+        output_labels,
+        output_allatom_labels,
+        [target],
+        outdir=outdir,
+        dataset_name=target,
+        start_idx=0,
+        end_idx=0,
+    )
+
+def preprocess_inputs(
+    sequences_file,
+    mmseqs_results_file,
     cif_dir,
     id_map_file="",
     start_idx=0,
     end_idx=0,
-    num_workers=4,
-    parallel=True,
 ):
+    """Read sequences, MMseqs alignments, release dates, and build task arguments.
 
+    Returns:
+        task_args: list of (target, sequence, cutoff, aln_lines) tuples
+        targets: full list of target IDs from the sequences file
+        cif_dir: resolved CIF directory path
+        release_dates: dict mapping PDB ID -> release date
+        id_map: dict mapping original -> new target IDs, or None
+        start_idx, end_idx: resolved 1-based slice indices
+    """
     if len(cif_dir) == 0:
         dir_name = os.path.dirname(os.path.abspath(sys.argv[0]))
         cif_dir = dir_name + "/PDB_RNA"
@@ -509,7 +546,6 @@ def get_template_labels(
             aln_lines[query].append(parts)
 
     id_map = read_id_map(id_map_file)
-
     release_dates = read_release_dates(cif_dir + "/pdb_release_dates_NA.csv")
 
     task_args = [
@@ -519,6 +555,38 @@ def get_template_labels(
         )
     ]
 
+    return task_args, targets, cif_dir, release_dates, id_map, start_idx, end_idx
+
+
+def get_template_labels_serial(
+    sequences_file,
+    mmseqs_results_file,
+    skip_temporal_cutoff,
+    MAX_TEMPLATES,
+    cif_dir,
+    id_map_file="",
+    start_idx=0,
+    end_idx=0,
+):
+    """Preprocess inputs, process all targets sequentially, and return results.
+
+    Returns:
+        output_labels: list of per-residue C1'-only label dicts
+        output_allatom_labels: list of per-residue all-atom label dicts
+        targets: full list of target IDs from the sequences file
+        start_idx, end_idx: resolved 1-based slice indices
+    """
+    task_args, targets, cif_dir, release_dates, id_map, start_idx, end_idx = (
+        preprocess_inputs(
+            sequences_file,
+            mmseqs_results_file,
+            cif_dir,
+            id_map_file,
+            start_idx,
+            end_idx,
+        )
+    )
+    print("Running in sequential mode")
     worker_fn = partial(
         process_target,
         skip_temporal_cutoff=skip_temporal_cutoff,
@@ -527,18 +595,10 @@ def get_template_labels(
         release_dates=release_dates,
         id_map=id_map,
     )
-
-    if parallel:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(worker_fn, *args): i for i, args in enumerate(task_args)}
-            results = [None] * len(task_args)
-            with tqdm(total=len(task_args), desc="Processing targets", file=sys.stderr) as pbar:
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    results[idx] = future.result()
-                    pbar.update(1)
-    else:
-        results = [worker_fn(*args) for args in tqdm(task_args, desc="Processing targets", file=sys.stderr)]
+    results = [
+        worker_fn(*args)
+        for args in tqdm(task_args, desc="Processing targets", file=sys.stderr)
+    ]
 
     output_labels = []
     output_allatom_labels = []
@@ -547,38 +607,98 @@ def get_template_labels(
         output_allatom_labels.extend(allatom_labels)
 
     print(f'Completed {len(task_args)} targets\n')
+    return output_labels, output_allatom_labels, targets, start_idx, end_idx
 
-    return output_labels, output_allatom_labels, targets
+
+def get_template_labels_parallel(
+    sequences_file,
+    mmseqs_results_file,
+    skip_temporal_cutoff,
+    MAX_TEMPLATES,
+    cif_dir,
+    id_map_file="",
+    start_idx=0,
+    end_idx=0,
+    num_workers=1,
+    outdir="output",
+):
+    """Preprocess inputs and process targets in parallel, writing one output file per target."""
+    task_args, targets, cif_dir, release_dates, id_map, start_idx, end_idx = (
+        preprocess_inputs(
+            sequences_file,
+            mmseqs_results_file,
+            cif_dir,
+            id_map_file,
+            start_idx,
+            end_idx,
+        )
+    )
+    print("Running in parallel mode, output one file per target")
+    worker_fn = partial(
+        process_and_save_target,
+        skip_temporal_cutoff=skip_temporal_cutoff,
+        MAX_TEMPLATES=MAX_TEMPLATES,
+        cif_dir=cif_dir,
+        release_dates=release_dates,
+        id_map=id_map,
+        outdir=outdir,
+    )
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(worker_fn, *args): i for i, args in enumerate(task_args)
+        }
+        with tqdm(
+            total=len(task_args), desc="Processing targets", file=sys.stderr
+        ) as pbar:
+            for future in as_completed(futures):
+                pbar.update(1)
+    print(f"Completed {len(task_args)} targets\n")
+
 
 # Create a DataFrame and write to CSV
-def output_csv( output_data, outfile ):
+def output_csv(output_data, outfile):
     df = pd.DataFrame(output_data)
     df.to_csv(outfile, index=False)
     print(f"Output written to {outfile}")
 
 
-def output_template_labels_to_csv( output_labels, output_allatom_labels, targets, outdir='', outfile='', dataset_name='', start_idx=0, end_idx=0 ):
-    assert( not( len(outfile)>0 and len(dataset_name)>0 ) )
+def output_template_labels_to_csv(
+    output_labels,
+    output_allatom_labels,
+    targets,
+    outdir="",
+    outfile=None,
+    outfile_allatom=None,
+    dataset_name="",
+    start_idx=0,
+    end_idx=0,
+):
+    assert not (outfile is not None and len(dataset_name) > 0)
 
     os.makedirs(outdir, exist_ok=True)
-    if outdir[-1] != '/': outdir += '/'
-    split_tag = ''
+    if outdir[-1] != "/":
+        outdir += "/"
+    split_tag = ""
     if start_idx > 0:
         num_digits = len(str(len(targets)))
-        split_tag = f'.{start_idx:0{num_digits}d}_{end_idx:0{num_digits}d}'
+        split_tag = f".{start_idx:0{num_digits}d}_{end_idx:0{num_digits}d}"
 
-    if len( outfile ) == 0:
-        if len( dataset_name) == 0: dataset_name = 'test'
+    if outfile is None:
+        if len(dataset_name) == 0:
+            dataset_name = "test"
         outfile = f"{outdir}{dataset_name}.templates{split_tag}.csv"
         outfile_allatom = f"{outdir}{dataset_name}.allatom_templates{split_tag}.csv"
     else:
-        outfile = f"{outdir}/{outfile}"
-        if outfile.count('labels.csv')>1: outfile_allatom = outfile.replace('labels.csv','allatom.csv')
-        elif outfile.endswith('.csv'):    outfile_allatom = outfile.replace('.csv','.allatom.csv')
-        else: outfile_allatom = outfile + '.allatom.csv'
+        if outfile_allatom is None:
+            if outfile.count("labels.csv") > 1:
+                outfile_allatom = outfile.replace("labels.csv", "allatom.csv")
+            elif outfile.endswith(".csv"):
+                outfile_allatom = outfile.replace(".csv", ".allatom.csv")
+            else:
+                outfile_allatom = outfile + ".allatom.csv"
 
-    output_csv( output_labels, outfile )
-    output_csv( output_allatom_labels, outfile_allatom )
+    output_csv(output_labels, outfile)
+    output_csv(output_allatom_labels, outfile_allatom)
 
 
 if __name__ == "__main__":
@@ -593,13 +713,47 @@ if __name__ == "__main__":
     end_idx = args.end_idx
     skip_temporal_cutoff = args.skip_temporal_cutoff
     num_workers = args.num_workers
-    parallel = not args.no_parallel
+    parallel = num_workers > 1
 
-    output_labels,output_allatom_labels,targets = get_template_labels( sequences_file, mmseqs_results_file, skip_temporal_cutoff,
-                                                       MAX_TEMPLATES, cif_dir, id_map_file, start_idx, end_idx, num_workers, parallel )
-
-
-    outdir = args.outdir
-    outfile = args.outfile
-    dataset_name = args.dataset_name
-    output_template_labels_to_csv( output_labels, output_allatom_labels, targets, outdir, outfile, dataset_name, start_idx, end_idx )
+    if parallel:
+        if args.outdir is None:
+            print(
+                "Error: --outdir must be specified when using parallel workers",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        get_template_labels_parallel(
+            sequences_file,
+            mmseqs_results_file,
+            skip_temporal_cutoff,
+            MAX_TEMPLATES,
+            cif_dir,
+            id_map_file,
+            start_idx,
+            end_idx,
+            num_workers,
+            outdir=args.outdir,
+        )
+    else:
+        output_labels, output_allatom_labels, targets, start_idx, end_idx = (
+            get_template_labels_serial(
+                sequences_file,
+                mmseqs_results_file,
+                skip_temporal_cutoff,
+                MAX_TEMPLATES,
+                cif_dir,
+                id_map_file,
+                start_idx,
+                end_idx,
+            )
+        )
+        output_template_labels_to_csv(
+            output_labels,
+            output_allatom_labels,
+            targets,
+            args.outdir,
+            f"{args.outdir}/{args.outfile}",
+            args.dataset_name,
+            start_idx,
+            end_idx,
+        )

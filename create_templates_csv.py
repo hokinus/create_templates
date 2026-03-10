@@ -497,7 +497,9 @@ def get_template_labels(
 
     selected_targets_set = set(selected_targets)
     aln_lines = defaultdict(list)
-    for line in open(mmseqs_results_file).readlines():
+    for line in tqdm(
+        open(mmseqs_results_file), desc="Reading MMseqs results", file=sys.stderr
+    ):
         # query,template,eval,qstart,qend,tstart,tend,qaln,taln
         parts = line.strip().split()
         query = parts[0]

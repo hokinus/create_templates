@@ -103,6 +103,102 @@ def test_get_template_labels(test_case):
     )
 
 
+# ---------------------------------------------------------------------------
+# Temporal-cutoff tests
+#
+# Uses the R1108 test case whose only template is 7qr3_C (released 2022-10-26).
+# Per-target cutoff in the CSV is 2022-05-27 (before the release date).
+# ---------------------------------------------------------------------------
+
+CUTOFF_TEST_CASE_ID = "R1108"
+TEMPLATE_RELEASE_DATE = "2022-10-26"  # release date of 7qr3_C
+CUTOFF_BEFORE_RELEASE = "2022-05-01"  # before release → template should be excluded
+CUTOFF_AFTER_RELEASE = "2023-01-01"  # after release  → template should be included
+
+
+def _get_r1108(test_cases):
+    """Return the R1108 TemplateTestCase, skipping if not present."""
+    matches = [tc for tc in test_cases if tc.test_id == CUTOFF_TEST_CASE_ID]
+    if not matches:
+        pytest.skip(f"Test case {CUTOFF_TEST_CASE_ID} not found in results directory")
+    return matches[0]
+
+
+def _run_serial(tc, *, skip_temporal_cutoff=False, fixed_temporal_cutoff=""):
+    """Helper: run get_template_labels_serial and return the labels DataFrame."""
+    project_root = Path(tc.sequences_file).parent.parent.parent
+    cif_dir = str(project_root / "PDB_RNA")
+    output_labels, _, _, _, _ = get_template_labels_serial(
+        sequences_file=tc.sequences_file,
+        mmseqs_results_file=tc.mmseqs_file,
+        skip_temporal_cutoff=skip_temporal_cutoff,
+        MAX_TEMPLATES=40,
+        cif_dir=cif_dir,
+        fixed_temporal_cutoff=fixed_temporal_cutoff,
+    )
+    return pd.DataFrame(output_labels)
+
+
+def test_temporal_cutoff_excludes_templates_before_release(test_cases):
+    """With a cutoff before the template release date all coordinates must be NaN."""
+    tc = _get_r1108(test_cases)
+    df = _run_serial(tc, fixed_temporal_cutoff=CUTOFF_BEFORE_RELEASE)
+
+    coord_cols = [c for c in df.columns if c.startswith(("x_", "y_", "z_"))]
+    assert coord_cols, "Expected coordinate columns in output"
+    assert df[coord_cols].isna().all().all(), (
+        f"Expected all coordinates to be NaN when cutoff {CUTOFF_BEFORE_RELEASE} "
+        f"is before template release {TEMPLATE_RELEASE_DATE}, but found non-NaN values"
+    )
+
+
+def test_temporal_cutoff_includes_templates_after_release(test_cases):
+    """With a cutoff after the template release date coordinates must not all be NaN."""
+    tc = _get_r1108(test_cases)
+    df = _run_serial(tc, fixed_temporal_cutoff=CUTOFF_AFTER_RELEASE)
+
+    coord_cols = [c for c in df.columns if c.startswith(("x_", "y_", "z_"))]
+    assert coord_cols, "Expected coordinate columns in output"
+    assert not df[coord_cols].isna().all().all(), (
+        f"Expected at least some non-NaN coordinates when cutoff {CUTOFF_AFTER_RELEASE} "
+        f"is after template release {TEMPLATE_RELEASE_DATE}"
+    )
+
+
+def test_fixed_temporal_cutoff_overrides_csv_cutoff(test_cases):
+    """fixed_temporal_cutoff must override the per-target cutoff from the CSV.
+
+    R1108's CSV cutoff (2022-05-27) is before the template release date, so without
+    override the template would be excluded.  Passing a fixed cutoff *after* the
+    release date should force the template to be included despite the CSV value.
+    """
+    tc = _get_r1108(test_cases)
+
+    # Without override: CSV cutoff 2022-05-27 < release 2022-10-26 → excluded
+    df_excluded = _run_serial(tc)
+    coord_cols = [c for c in df_excluded.columns if c.startswith(("x_", "y_", "z_"))]
+    assert df_excluded[coord_cols].isna().all().all(), (
+        "Baseline: expected all NaN when using per-CSV cutoff that predates release"
+    )
+
+    # With fixed override after release → included
+    df_included = _run_serial(tc, fixed_temporal_cutoff=CUTOFF_AFTER_RELEASE)
+    assert not df_included[coord_cols].isna().all().all(), (
+        "fixed_temporal_cutoff should override the CSV cutoff and include the template"
+    )
+
+
+def test_skip_temporal_cutoff_ignores_date(test_cases):
+    """skip_temporal_cutoff=True must include the template regardless of dates."""
+    tc = _get_r1108(test_cases)
+    df = _run_serial(tc, skip_temporal_cutoff=True)
+
+    coord_cols = [c for c in df.columns if c.startswith(("x_", "y_", "z_"))]
+    assert not df[coord_cols].isna().all().all(), (
+        "skip_temporal_cutoff=True should include all templates regardless of dates"
+    )
+
+
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main([__file__, "-v", "-s"])

@@ -43,6 +43,12 @@ parser.add_argument('--cif_dir',
 parser.add_argument('--skip_temporal_cutoff',
                     action='store_true',
                     help='Disable tests of temporal cutoff')
+parser.add_argument(
+    "--temporal_cutoff",
+    default="",
+    help="Fixed temporal cutoff date (YYYY-MM-DD) applied to all targets, "
+    "overriding per-target cutoffs from the sequences file.",
+)
 parser.add_argument('--start_idx',
                     default=0, type=int,
                     help='Start index (1,2,...) of test_sequences to work on, for parallelization. Default: 0 (do all sequences).' )
@@ -504,8 +510,13 @@ def preprocess_inputs(
     id_map_file="",
     start_idx=0,
     end_idx=0,
+    fixed_temporal_cutoff="",
 ):
     """Read sequences, MMseqs alignments, release dates, and build task arguments.
+
+    Args:
+        fixed_temporal_cutoff: If non-empty, overrides the per-target temporal cutoff
+            from the sequences file with this single date (YYYY-MM-DD) for all targets.
 
     Returns:
         task_args: list of (target, sequence, cutoff, aln_lines) tuples
@@ -531,6 +542,12 @@ def preprocess_inputs(
     selected_targets = targets[start_idx - 1 : end_idx]
     selected_sequences = sequences[start_idx - 1 : end_idx]
     selected_cutoffs = temporal_cutoffs[start_idx - 1 : end_idx]
+
+    if fixed_temporal_cutoff:
+        print(
+            f"Overriding per-target temporal cutoffs with fixed cutoff: {fixed_temporal_cutoff}"
+        )
+        selected_cutoffs = [fixed_temporal_cutoff] * len(selected_targets)
 
     selected_targets_set = set(selected_targets)
     aln_lines = defaultdict(list)
@@ -567,8 +584,12 @@ def get_template_labels_serial(
     id_map_file="",
     start_idx=0,
     end_idx=0,
+    fixed_temporal_cutoff="",
 ):
     """Preprocess inputs, process all targets sequentially, and return results.
+
+    Args:
+        fixed_temporal_cutoff: If non-empty, overrides per-target cutoffs for all targets.
 
     Returns:
         output_labels: list of per-residue C1'-only label dicts
@@ -584,6 +605,7 @@ def get_template_labels_serial(
             id_map_file,
             start_idx,
             end_idx,
+            fixed_temporal_cutoff,
         )
     )
     print("Running in sequential mode")
@@ -621,6 +643,7 @@ def get_template_labels_parallel(
     end_idx=0,
     num_workers=1,
     outdir="output",
+    fixed_temporal_cutoff="",
 ):
     """Preprocess inputs and process targets in parallel, writing one output file per target."""
     task_args, targets, cif_dir, release_dates, id_map, start_idx, end_idx = (
@@ -631,6 +654,7 @@ def get_template_labels_parallel(
             id_map_file,
             start_idx,
             end_idx,
+            fixed_temporal_cutoff,
         )
     )
     print("Running in parallel mode, output one file per target")
@@ -733,6 +757,7 @@ if __name__ == "__main__":
             end_idx,
             num_workers,
             outdir=args.outdir,
+            fixed_temporal_cutoff=args.temporal_cutoff,
         )
     else:
         output_labels, output_allatom_labels, targets, start_idx, end_idx = (
@@ -745,6 +770,7 @@ if __name__ == "__main__":
                 id_map_file,
                 start_idx,
                 end_idx,
+                fixed_temporal_cutoff=args.temporal_cutoff,
             )
         )
         output_template_labels_to_csv(

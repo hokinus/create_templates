@@ -502,10 +502,11 @@ def get_template_labels(
     ):
         # query,template,eval,qstart,qend,tstart,tend,qaln,taln
         parts = line.strip().split()
-        query = parts[0]
-        if query not in selected_targets_set:
-            continue
-        aln_lines[query].append(parts)
+        if parts:
+            query = parts[0]
+            if query not in selected_targets_set:
+                continue
+            aln_lines[query].append(parts)
 
     id_map = read_id_map(id_map_file)
 
